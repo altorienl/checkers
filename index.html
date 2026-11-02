@@ -24,7 +24,7 @@
         .difficulty-bar {
             display: flex;
             gap: 8px;
-            margin-bottom: 14px;
+            margin-bottom: 10px;
         }
         .diff-btn {
             padding: 7px 18px;
@@ -43,6 +43,33 @@
         .diff-btn.active.medium { border-color: #e8a735; background: #e8a735; color: #1a1a2e; }
         .diff-btn.active.hard { border-color: #e63946; background: #e63946; }
         .diff-btn.active.pvp { border-color: #7b61ff; background: #7b61ff; }
+
+        .color-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            align-items: center;
+        }
+        .color-bar .color-label {
+            font-size: 13px;
+            color: #888;
+            margin-right: 4px;
+        }
+        .color-btn {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            border: 3px solid rgba(255,255,255,0.15);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .color-btn:hover { border-color: rgba(255,255,255,0.5); transform: scale(1.1); }
+        .color-btn.active { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.4); }
+        .color-btn.red-choice {
+            background: radial-gradient(circle at 35% 35%, #ff6b6b, #e63946, #c1121f);
+        }
+        .color-btn.black-choice {
+            background: radial-gradient(circle at 35% 35%, #666, #333, #1a1a1a);
+        }
 
         .top-bar {
             display: flex;
@@ -114,6 +141,8 @@
             overflow: hidden;
         }
         .board.locked { pointer-events: none; }
+        .board.flipped { transform: rotate(180deg); }
+        .board.flipped .cell { transform: rotate(180deg); }
 
         .cell {
             width: 60px; height: 60px;
@@ -225,15 +254,6 @@
 
         .hidden { display: none; }
 
-        .move-log {
-            margin-top: 10px;
-            font-size: 11px;
-            color: #666;
-            max-width: 480px;
-            text-align: center;
-            line-height: 1.5;
-        }
-
         @media (max-width: 540px) {
             .board { width: 320px; height: 320px; }
             .cell { width: 40px; height: 40px; }
@@ -252,6 +272,12 @@
         <button class="diff-btn easy" data-diff="easy" onclick="setDifficulty('easy')">Easy</button>
         <button class="diff-btn medium active medium" data-diff="medium" onclick="setDifficulty('medium')">Medium</button>
         <button class="diff-btn hard" data-diff="hard" onclick="setDifficulty('hard')">Hard</button>
+    </div>
+
+    <div class="color-bar" id="colorBar">
+        <span class="color-label">Play as:</span>
+        <div class="color-btn red-choice active" data-color="red" onclick="setPlayerColor('red')"></div>
+        <div class="color-btn black-choice" data-color="black" onclick="setPlayerColor('black')"></div>
     </div>
 
     <div class="top-bar">
@@ -284,8 +310,6 @@
         <button class="btn btn-secondary" id="undoBtn" onclick="undoMove()">Undo</button>
     </div>
 
-    <div class="move-log" id="moveLog"></div>
-
     <div class="modal-overlay hidden" id="winModal">
         <div class="modal">
             <div class="trophy" id="winTrophy"></div>
@@ -304,8 +328,9 @@
     let currentTurn = RED;
     let history = [];
     let mustJumpPiece = null;
-    let moveCount = 0;
     let difficulty = 'medium';
+    let playerColor = RED;
+    let cpuColor = BLACK;
     let cpuThinking = false;
     let lastMove = null;
 
@@ -318,14 +343,29 @@
         difficulty = d;
         document.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
         document.querySelector(`[data-diff="${d}"]`).classList.add('active');
+        document.getElementById('colorBar').style.display = d === 'pvp' ? 'none' : '';
         if (d === 'pvp') {
             document.getElementById('redLabel').textContent = 'Red';
             document.getElementById('blackLabel').textContent = 'Black';
         } else {
-            document.getElementById('redLabel').textContent = 'You';
-            document.getElementById('blackLabel').textContent = 'CPU';
+            updateLabels();
         }
         newGame();
+    }
+
+    function setPlayerColor(color) {
+        playerColor = color === 'red' ? RED : BLACK;
+        cpuColor = playerColor === RED ? BLACK : RED;
+        document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector(`[data-color="${color}"]`).classList.add('active');
+        updateLabels();
+        newGame();
+    }
+
+    function updateLabels() {
+        if (difficulty === 'pvp') return;
+        document.getElementById('redLabel').textContent = playerColor === RED ? 'You' : 'CPU';
+        document.getElementById('blackLabel').textContent = playerColor === BLACK ? 'You' : 'CPU';
     }
 
     function initBoard() {
@@ -347,12 +387,18 @@
         validMoves = [];
         history = [];
         mustJumpPiece = null;
-        moveCount = 0;
         cpuThinking = false;
         lastMove = null;
         document.getElementById('winModal').classList.add('hidden');
-        document.getElementById('moveLog').textContent = '';
+
+        const boardEl = document.getElementById('board');
+        boardEl.classList.toggle('flipped', difficulty !== 'pvp' && playerColor === BLACK);
+
         render();
+
+        if (difficulty !== 'pvp' && currentTurn === cpuColor) {
+            executeCpuTurn();
+        }
     }
 
     function getMoveDirs(piece) {
@@ -398,8 +444,6 @@
         return false;
     }
 
-    function playerHasJumps(player) { return playerHasJumpsOn(board, player); }
-
     function getAllMovesOn(b, player) {
         const allMoves = [];
         const hasJumps = playerHasJumpsOn(b, player);
@@ -407,24 +451,25 @@
             for (let c = 0; c < 8; c++) {
                 if (owner(b[r][c]) !== player) continue;
                 const piece = b[r][c];
-                const jumps = getJumpsOn(b, r, c, piece);
                 if (hasJumps) {
-                    for (const j of jumps) allMoves.push({ fromR: r, fromC: c, ...j });
+                    for (const j of getJumpsOn(b, r, c, piece))
+                        allMoves.push({ fromR: r, fromC: c, ...j });
                 } else {
-                    for (const m of getSimpleMovesOn(b, r, c, piece)) allMoves.push({ fromR: r, fromC: c, ...m });
+                    for (const m of getSimpleMovesOn(b, r, c, piece))
+                        allMoves.push({ fromR: r, fromC: c, ...m });
                 }
             }
         }
         return allMoves;
     }
 
+    // Player moves: no forced jumps — show all legal moves
     function getValidMoves(r, c) {
         const piece = board[r][c];
         if (owner(piece) !== currentTurn) return [];
         const jumps = getJumps(r, c, piece);
-        if (jumps.length > 0) return jumps;
-        if (playerHasJumps(currentTurn)) return [];
-        return getSimpleMoves(r, c, piece);
+        const simple = getSimpleMoves(r, c, piece);
+        return [...jumps, ...simple];
     }
 
     function applyMoveOn(b, fromR, fromC, move) {
@@ -438,40 +483,12 @@
         return nb;
     }
 
-    function getFullJumpSequences(b, r, c, player) {
-        const piece = b[r][c];
-        const jumps = getJumpsOn(b, r, c, piece);
-        if (jumps.length === 0) return [[]];
-
-        const sequences = [];
-        for (const j of jumps) {
-            const nb = cloneBoard(b);
-            nb[r][c] = EMPTY;
-            let landed = piece;
-            if (j.r === 0 && piece === RED) landed = RED_KING;
-            if (j.r === 7 && piece === BLACK) landed = BLACK_KING;
-            nb[j.r][j.c] = landed;
-            nb[j.captureR][j.captureC] = EMPTY;
-
-            const promoted = landed !== piece;
-            if (promoted) {
-                sequences.push([j]);
-            } else {
-                const further = getFullJumpSequences(nb, j.r, j.c, player);
-                for (const seq of further) {
-                    sequences.push([j, ...seq]);
-                }
-            }
-        }
-        return sequences;
-    }
-
-    // ---- AI ----
+    // ---- AI (CPU still uses forced jumps for smarter play) ----
 
     function evaluate(b, aiPlayer) {
         const opp = aiPlayer === BLACK ? RED : BLACK;
         let score = 0;
-        let aiPieces = 0, oppPieces = 0, aiKings = 0, oppKings = 0;
+        let aiPieces = 0, oppPieces = 0;
 
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
@@ -482,7 +499,6 @@
 
                 if (o === aiPlayer) {
                     aiPieces++;
-                    if (k) aiKings++;
                     score += k ? 7 : 3;
                     if (!k && aiPlayer === BLACK) score += r * 0.1;
                     if (!k && aiPlayer === RED) score += (7 - r) * 0.1;
@@ -490,7 +506,6 @@
                     if (r === 0 || r === 7 || c === 0 || c === 7) score += 0.2;
                 } else {
                     oppPieces++;
-                    if (k) oppKings++;
                     score -= k ? 7 : 3;
                     if (!k && o === BLACK) score -= r * 0.1;
                     if (!k && o === RED) score -= (7 - r) * 0.1;
@@ -526,26 +541,24 @@
             for (const move of moves) {
                 let nb = applyMoveOn(b, move.fromR, move.fromC, move);
                 if (move.captureR !== undefined) {
-                    const piece = nb[move.r][move.c];
-                    const promoted = (move.r === 0 && isRed(piece) && isKing(piece) && !isKing(b[move.fromR][move.fromC])) ||
-                                     (move.r === 7 && isBlack(piece) && isKing(piece) && !isKing(b[move.fromR][move.fromC]));
-                    if (!promoted) {
-                        let further = getJumpsOn(nb, move.r, move.c, nb[move.r][move.c]);
+                    let cr = move.r, cc = move.c;
+                    let piece = nb[cr][cc];
+                    const wasKing = isKing(b[move.fromR][move.fromC]);
+                    const nowKing = isKing(piece);
+                    if (!(nowKing && !wasKing)) {
+                        let further = getJumpsOn(nb, cr, cc, nb[cr][cc]);
                         while (further.length > 0) {
                             const best = further[Math.floor(Math.random() * further.length)];
-                            nb = applyMoveOn(nb, move.r, move.c, best);
+                            nb = applyMoveOn(nb, cr, cc, best);
                             const p2 = nb[best.r][best.c];
-                            const prom2 = (best.r === 0 && isRed(p2) && isKing(p2)) || (best.r === 7 && isBlack(p2) && isKing(p2));
-                            if (prom2) break;
-                            further = getJumpsOn(nb, best.r, best.c, nb[best.r][best.c]);
+                            if (isKing(p2) && !isKing(piece)) break;
+                            cr = best.r; cc = best.c;
+                            further = getJumpsOn(nb, cr, cc, nb[cr][cc]);
                         }
                     }
                 }
                 const { score } = minimax(nb, depth - 1, alpha, beta, false, aiPlayer);
-                if (score > maxEval) {
-                    maxEval = score;
-                    bestMove = move;
-                }
+                if (score > maxEval) { maxEval = score; bestMove = move; }
                 alpha = Math.max(alpha, score);
                 if (beta <= alpha) break;
             }
@@ -555,26 +568,24 @@
             for (const move of moves) {
                 let nb = applyMoveOn(b, move.fromR, move.fromC, move);
                 if (move.captureR !== undefined) {
-                    const piece = nb[move.r][move.c];
-                    const promoted = (move.r === 0 && isRed(piece) && isKing(piece) && !isKing(b[move.fromR][move.fromC])) ||
-                                     (move.r === 7 && isBlack(piece) && isKing(piece) && !isKing(b[move.fromR][move.fromC]));
-                    if (!promoted) {
-                        let further = getJumpsOn(nb, move.r, move.c, nb[move.r][move.c]);
+                    let cr = move.r, cc = move.c;
+                    let piece = nb[cr][cc];
+                    const wasKing = isKing(b[move.fromR][move.fromC]);
+                    const nowKing = isKing(piece);
+                    if (!(nowKing && !wasKing)) {
+                        let further = getJumpsOn(nb, cr, cc, nb[cr][cc]);
                         while (further.length > 0) {
                             const best = further[Math.floor(Math.random() * further.length)];
-                            nb = applyMoveOn(nb, move.r, move.c, best);
+                            nb = applyMoveOn(nb, cr, cc, best);
                             const p2 = nb[best.r][best.c];
-                            const prom2 = (best.r === 0 && isRed(p2) && isKing(p2)) || (best.r === 7 && isBlack(p2) && isKing(p2));
-                            if (prom2) break;
-                            further = getJumpsOn(nb, best.r, best.c, nb[best.r][best.c]);
+                            if (isKing(p2) && !isKing(piece)) break;
+                            cr = best.r; cc = best.c;
+                            further = getJumpsOn(nb, cr, cc, nb[cr][cc]);
                         }
                     }
                 }
                 const { score } = minimax(nb, depth - 1, alpha, beta, true, aiPlayer);
-                if (score < minEval) {
-                    minEval = score;
-                    bestMove = move;
-                }
+                if (score < minEval) { minEval = score; bestMove = move; }
                 beta = Math.min(beta, score);
                 if (beta <= alpha) break;
             }
@@ -583,7 +594,7 @@
     }
 
     function cpuPickMove() {
-        const moves = getAllMovesOn(board, BLACK);
+        const moves = getAllMovesOn(board, cpuColor);
         if (moves.length === 0) return null;
 
         if (difficulty === 'easy') {
@@ -596,19 +607,19 @@
                 let best = jumps[0], bestScore = -Infinity;
                 for (const j of jumps) {
                     const nb = applyMoveOn(board, j.fromR, j.fromC, j);
-                    const s = evaluate(nb, BLACK);
+                    const s = evaluate(nb, cpuColor);
                     if (s > bestScore) { bestScore = s; best = j; }
                 }
                 return best;
             }
-            const { move } = minimax(board, 3, -Infinity, Infinity, true, BLACK);
+            const { move } = minimax(board, 3, -Infinity, Infinity, true, cpuColor);
             return move || moves[Math.floor(Math.random() * moves.length)];
         }
 
         if (difficulty === 'hard') {
             const totalPieces = board.flat().filter(p => p !== EMPTY).length;
             const depth = totalPieces <= 8 ? 8 : totalPieces <= 14 ? 7 : 6;
-            const { move } = minimax(board, depth, -Infinity, Infinity, true, BLACK);
+            const { move } = minimax(board, depth, -Infinity, Infinity, true, cpuColor);
             return move || moves[0];
         }
 
@@ -617,7 +628,7 @@
 
     function executeCpuTurn() {
         if (difficulty === 'pvp') return;
-        if (currentTurn !== BLACK) return;
+        if (currentTurn !== cpuColor) return;
 
         cpuThinking = true;
         render();
@@ -631,12 +642,11 @@
             lastMove = { fromR: move.fromR, fromC: move.fromC, toR: move.r, toC: move.c };
 
             const piece = board[move.fromR][move.fromC];
-            const snapshot = {
+            history.push({
                 board: cloneBoard(board),
                 turn: currentTurn,
                 mustJumpPiece: null
-            };
-            history.push(snapshot);
+            });
 
             board[move.fromR][move.fromC] = EMPTY;
             board[move.r][move.c] = piece;
@@ -647,14 +657,8 @@
             }
 
             let promoted = false;
-            if (move.r === 7 && piece === BLACK) {
-                board[move.r][move.c] = BLACK_KING;
-                promoted = true;
-            }
-
-            moveCount++;
-            const cols = 'abcdefgh';
-            let moveText = `${cols[move.fromC]}${8 - move.fromR}${captured ? 'x' : '-'}${cols[move.c]}${8 - move.r}`;
+            if (move.r === 0 && piece === RED) { board[move.r][move.c] = RED_KING; promoted = true; }
+            if (move.r === 7 && piece === BLACK) { board[move.r][move.c] = BLACK_KING; promoted = true; }
 
             if (captured && !promoted) {
                 let cr = move.r, cc = move.c;
@@ -665,7 +669,7 @@
                         let bestScore = -Infinity;
                         for (const fj of furtherJumps) {
                             const nb = applyMoveOn(board, cr, cc, fj);
-                            const s = evaluate(nb, BLACK);
+                            const s = evaluate(nb, cpuColor);
                             if (s > bestScore) { bestScore = s; bestJump = fj; }
                         }
                     } else {
@@ -677,12 +681,9 @@
                     board[bestJump.r][bestJump.c] = p2;
                     board[bestJump.captureR][bestJump.captureC] = EMPTY;
 
-                    if (bestJump.r === 7 && p2 === BLACK) {
-                        board[bestJump.r][bestJump.c] = BLACK_KING;
-                        promoted = true;
-                    }
+                    if (bestJump.r === 0 && p2 === RED) { board[bestJump.r][bestJump.c] = RED_KING; promoted = true; }
+                    if (bestJump.r === 7 && p2 === BLACK) { board[bestJump.r][bestJump.c] = BLACK_KING; promoted = true; }
 
-                    moveText += `x${cols[bestJump.c]}${8 - bestJump.r}`;
                     lastMove.toR = bestJump.r;
                     lastMove.toC = bestJump.c;
                     cr = bestJump.r;
@@ -696,8 +697,7 @@
             selectedPiece = null;
             validMoves = [];
             mustJumpPiece = null;
-            currentTurn = RED;
-            updateLog(moveText);
+            currentTurn = currentTurn === RED ? BLACK : RED;
             render();
             checkWin();
         }, delay);
@@ -707,7 +707,7 @@
 
     function cellClicked(r, c) {
         if (cpuThinking) return;
-        if (difficulty !== 'pvp' && currentTurn === BLACK) return;
+        if (difficulty !== 'pvp' && currentTurn === cpuColor) return;
 
         if (mustJumpPiece) {
             if (r === mustJumpPiece.r && c === mustJumpPiece.c) {
@@ -765,17 +765,12 @@
         if (move.r === 0 && piece === RED) { board[move.r][move.c] = RED_KING; promoted = true; }
         if (move.r === 7 && piece === BLACK) { board[move.r][move.c] = BLACK_KING; promoted = true; }
 
-        moveCount++;
-        const cols = 'abcdefgh';
-        const moveText = `${cols[fromC]}${8 - fromR}${captured ? 'x' : '-'}${cols[move.c]}${8 - move.r}`;
-
         if (captured && !promoted) {
             const furtherJumps = getJumps(move.r, move.c, board[move.r][move.c]);
             if (furtherJumps.length > 0) {
                 mustJumpPiece = { r: move.r, c: move.c };
                 selectedPiece = mustJumpPiece;
                 validMoves = furtherJumps;
-                updateLog(moveText + '...');
                 render();
                 return;
             }
@@ -785,11 +780,10 @@
         selectedPiece = null;
         validMoves = [];
         currentTurn = currentTurn === RED ? BLACK : RED;
-        updateLog(moveText);
         render();
 
         if (!checkWin()) {
-            if (difficulty !== 'pvp' && currentTurn === BLACK) {
+            if (difficulty !== 'pvp' && currentTurn === cpuColor) {
                 executeCpuTurn();
             }
         }
@@ -800,13 +794,12 @@
         if (history.length === 0) return;
 
         if (difficulty !== 'pvp') {
-            // Undo both CPU and player moves
             while (history.length > 0) {
                 const snapshot = history.pop();
                 board = snapshot.board;
                 currentTurn = snapshot.turn;
                 mustJumpPiece = snapshot.mustJumpPiece;
-                if (currentTurn === RED) break;
+                if (currentTurn === playerColor) break;
             }
         } else {
             const snapshot = history.pop();
@@ -843,14 +836,16 @@
 
         const isCPU = difficulty !== 'pvp';
         if (blackPieces === 0 || (currentTurn === BLACK && !blackMoves)) {
-            const title = isCPU ? 'You Win!' : 'Red Wins!';
-            const trophy = isCPU ? '🏆' : '🎉';
-            showWin(title, blackPieces === 0 ? 'All opponent pieces captured' : 'Opponent has no moves left', trophy);
+            const playerWon = isCPU && playerColor === RED;
+            const title = isCPU ? (playerWon ? 'You Win!' : 'CPU Wins!') : 'Red Wins!';
+            const trophy = playerWon ? '🏆' : (isCPU ? '🤖' : '🎉');
+            showWin(title, blackPieces === 0 ? 'All black pieces captured' : 'Black has no moves left', trophy);
             return true;
         } else if (redPieces === 0 || (currentTurn === RED && !redMoves)) {
-            const title = isCPU ? 'CPU Wins!' : 'Black Wins!';
-            const trophy = isCPU ? '🤖' : '🎉';
-            showWin(title, redPieces === 0 ? 'All your pieces captured' : 'No moves available', trophy);
+            const playerWon = isCPU && playerColor === BLACK;
+            const title = isCPU ? (playerWon ? 'You Win!' : 'CPU Wins!') : 'Black Wins!';
+            const trophy = playerWon ? '🏆' : (isCPU ? '🤖' : '🎉');
+            showWin(title, redPieces === 0 ? 'All red pieces captured' : 'Red has no moves left', trophy);
             return true;
         }
         return false;
@@ -861,16 +856,6 @@
         document.getElementById('winTitle').textContent = title;
         document.getElementById('winMessage').textContent = message;
         document.getElementById('winModal').classList.remove('hidden');
-    }
-
-    function updateLog(text) {
-        const log = document.getElementById('moveLog');
-        const num = Math.ceil(moveCount / 2);
-        if (moveCount % 2 === 1) {
-            log.textContent += (moveCount > 1 ? '   ' : '') + num + '. ' + text;
-        } else {
-            log.textContent += ' ' + text;
-        }
     }
 
     function render() {
@@ -899,11 +884,13 @@
         const turnEl = document.getElementById('turnIndicator');
         const isCPU = difficulty !== 'pvp';
         if (cpuThinking) {
-            turnEl.innerHTML = '<span class="dot black"></span> <span class="thinking">CPU thinking</span>';
+            turnEl.innerHTML = '<span class="dot ' + (cpuColor === RED ? 'red' : 'black') + '"></span> <span class="thinking">CPU thinking</span>';
         } else if (currentTurn === RED) {
-            turnEl.innerHTML = `<span class="dot red"></span> ${isCPU ? 'Your turn' : "Red's turn"}`;
+            const label = isCPU ? (playerColor === RED ? 'Your turn' : "CPU's turn") : "Red's turn";
+            turnEl.innerHTML = '<span class="dot red"></span> ' + label;
         } else {
-            turnEl.innerHTML = `<span class="dot black"></span> ${isCPU ? "CPU's turn" : "Black's turn"}`;
+            const label = isCPU ? (playerColor === BLACK ? 'Your turn' : "CPU's turn") : "Black's turn";
+            turnEl.innerHTML = '<span class="dot black"></span> ' + label;
         }
 
         const highlightCells = new Set(validMoves.map(m => m.r + ',' + m.c));
